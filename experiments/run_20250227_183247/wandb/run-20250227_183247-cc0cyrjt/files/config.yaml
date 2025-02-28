@@ -1,0 +1,74 @@
+_wandb:
+    value:
+        cli_version: 0.19.7
+        m: []
+        python_version: 3.10.16
+        t:
+            "1":
+                - 1
+                - 55
+            "2":
+                - 1
+                - 55
+            "3":
+                - 13
+                - 15
+                - 16
+                - 23
+                - 55
+            "4": 3.10.16
+            "5": 0.19.7
+            "8":
+                - 5
+            "12": 0.19.7
+            "13": linux-x86_64
+actor_hidden_sizes:
+    value:
+        - 256
+        - 256
+        - 256
+actor_lr:
+    value: 0.001
+alpha:
+    value: 0.2
+batch_size:
+    value: 256
+buffer_size:
+    value: 20000
+critic_hidden_sizes:
+    value:
+        - 256
+        - 256
+        - 256
+critic_lr:
+    value: 0.001
+episode_per_test:
+    value: 1
+exp_name:
+    value: reach_grasp_baseline
+gamma:
+    value: 0.99
+log_interval:
+    value: 1
+max_epoch:
+    value: 100
+n_step_returns:
+    value: 1
+notes:
+    value: Baseline SAC implementation for reach-grasp task
+num_test_envs:
+    value: 1
+num_train_envs:
+    value: 1
+save_interval:
+    value: 10
+step_per_collect:
+    value: 100
+step_per_epoch:
+    value: 100
+target_reward:
+    value: 180
+tau:
+    value: 0.005
+update_per_step:
+    value: 0.1

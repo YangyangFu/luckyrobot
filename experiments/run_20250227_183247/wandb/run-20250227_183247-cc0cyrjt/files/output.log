@@ -1,0 +1,53 @@
+Preprocessed obs: device = cuda:0
+Preprocessed obs: device = cuda:0
+Preprocessed obs: device = cuda:0
+Preprocessed obs: device = cuda:0
+Collecting initial experience...
+Traceback (most recent call last):
+  File "/home/yyf/github/luckyrobot/scripts/train.py", line 422, in <module>
+    main()
+  File "/home/yyf/github/luckyrobot/scripts/train.py", line 419, in main
+    pipeline.train()
+  File "/home/yyf/github/luckyrobot/scripts/train.py", line 284, in train
+    train_collector, test_collector = self.setup_collectors(
+  File "/home/yyf/github/luckyrobot/scripts/train.py", line 248, in setup_collectors
+    train_collector.collect(n_step=self.config['batch_size'])
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/tianshou/data/collector.py", line 279, in collect
+    result = self.policy(self.data, last_state)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/tianshou/policy/modelfree/sac.py", line 115, in forward
+    logits, hidden = self.actor(obs, state=state, info=batch.info)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/tianshou/utils/net/continuous.py", line 217, in forward
+    logits, hidden = self.preprocess(obs, state)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/tianshou/utils/net/common.py", line 248, in forward
+    logits = self.model(obs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/tianshou/utils/net/common.py", line 145, in forward
+    return self.model(obs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/container.py", line 250, in forward
+    input = module(input)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/yyf/miniconda3/envs/luckyrobot/lib/python3.10/site-packages/torch/nn/modules/linear.py", line 125, in forward
+    return F.linear(input, self.weight, self.bias)
+RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu! (when checking argument for argument mat1 in method wrapper_CUDA_addmm)
