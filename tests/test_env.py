@@ -1,5 +1,7 @@
+import time
 import numpy as np
 from envs.humanoid_walk_env import make_env
+from tianshou.env import DummyVectorEnv, SubprocVectorEnv
 
 def test_env():
     # Create environment
@@ -53,5 +55,26 @@ def test_env():
     env.close()
     print("\nEnvironment closed successfully")
 
+
+def test_vectorized_env():
+
+    num_cpus = [1, 2, 16]
+    env_name = 'HumanoidDeepMimicWalkBulletEnv-v1'
+    for num_cpu in num_cpus:
+        env = SubprocVectorEnv([lambda: make_env(env_name=env_name, renders=False) for _ in range(num_cpu)])
+        env.reset()
+        sampled_steps = 0
+        time_start = time.time()
+        while sampled_steps < 1000:
+            act = np.random.choice(2, size=num_cpu)
+            obs, rew, terminated, truncated, info = env.step(act)
+            if np.sum(terminated):
+                env.reset(np.where(terminated)[0])
+            sampled_steps += num_cpu
+        time_used = time.time() - time_start
+        print(f"{time_used}s used to sample 1000 steps if using {num_cpu} cpus.")
+    
+
 if __name__ == "__main__":
     test_env()
+    test_vectorized_env()
