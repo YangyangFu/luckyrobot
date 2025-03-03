@@ -8,12 +8,16 @@ def main():
     # Create trainer
     trainer = MujocoTrainer(config)
     
-    # Train or evaluate
+    # Evaulate only with pretrained policy
     if config.watch and not config.render:
         stats = trainer.evaluate()
         print("Evaluation stats:", stats)
+    
+    # Evaluate and save video
     elif config.watch and config.render:
         trainer.watch_and_save_video(video_dir="videos/Humanoid-v4")
+    
+    # Train and evaluate
     else:
         result = trainer.train()
         print("Training complete!")
