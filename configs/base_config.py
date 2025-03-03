@@ -5,19 +5,19 @@ import torch
 @dataclass
 class BaseConfig:
     # Common parameters
-    seed: int = 0
+    seed: int = 2000
     training_num: int = 1
     test_num: int = 1
     hidden_sizes: List[int] = (256, 256)
-    actor_lr: float = 1e-3
-    critic_lr: float = 1e-3
+    actor_lr: float = 1e-4
+    critic_lr: float = 1e-4
     buffer_size: int = 1_000_000
     
     # SAC specific
     gamma: float = 0.99
     tau: float = 0.005
     alpha: float = 0.2
-    auto_alpha: bool = False
+    auto_alpha: bool = True
     alpha_lr: float = 3e-4
     
     # Training
@@ -32,4 +32,4 @@ class BaseConfig:
     render: float = 1.0
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     logger: str = "tensorboard"
-    watch: bool = True 
+    watch: bool = False 

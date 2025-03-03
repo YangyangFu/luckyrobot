@@ -19,3 +19,8 @@ class BaseTrainer(ABC):
     def evaluate(self):
         """Evaluate the agent"""
         pass 
+    
+    @abstractmethod
+    def watch_and_save_video(self, video_dir: str):
+        """Watch the agent and save a video"""
+        pass

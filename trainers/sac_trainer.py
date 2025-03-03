@@ -20,7 +20,6 @@ class SACTrainer(BaseTrainer):
     def __init__(self, config):
         super().__init__(config)
         
-        # Set random seeds
         np.random.seed(config.seed)
         torch.manual_seed(config.seed)
         
