@@ -1,72 +1,78 @@
-# luckyrobot
-Interview demo for LuckyRobot MLE position - Robot Learning in PyBullet
+# LuckyRobot
 
-## requirements
+Interview demo for LuckyRobot MLE position - Humanoid Robot Learning in Mujoco/PyBullet.
 
-Thank you for your interest in the Robotics ML Engineer position. We are excited about your background and would like to move forward with a practical exercise to better understand your approach to solving real-world robotics challenges.
-This role requires someone who can demonstrate the ability to train robots using machine learning and contribute effectively to our projects. To assess your skills, we have prepared an open-ended exercise that allows you to showcase your expertise in a meaningful way.
+## Task Definition
 
-### The Exercise
-Your task is to design and implement a pipeline to train a robot to perform a perception, manipulation, or locomotion task of your choice (or a project you have completed in the past that fits this exercise). This can be done entirely in simulation using free tools, and we encourage creativity in defining the task.
+For this project, I implemented a humanoid walking task using reinforcement learning in simulation. The robot learned to walk in a natural human-like manner. This task is fundamental to robotic manipulation and represents a core capability needed in various applications from manufacturing to service robotics.
 
-### Deliverables
+## Pipeline and Toolchain
 
-**Task Definition**
-For this project, we will implement a humanoid walking task using reinforcement learning in simulation. The robot will learn to:
-1. Walk in a natural human-like manner
-2. Maintain balance while walking
-3. Follow reference motion data for realistic movement
+My implementation uses the following pipeline:
 
-The implementation uses PPO (Proximal Policy Optimization) with the following key components:
-- Actor-critic architecture with shared network layers
-- Observation scaling for better training stability 
-- Parallel training environments for faster data collection
-- Advantage estimation with GAE-λ
-- Action bounds handling for the humanoid's joints
-
-This task is fundamental to robotic manipulation and represents a core capability needed in various applications from manufacturing to service robotics.
-
-**Pipeline and Toolchain**
-Our implementation uses the following pipeline:
-
-1. **Simulation Environment**: 
-   - PyBullet for physics simulation
-   - Custom gymnasium environment for RL training
+1. **Simulation Environment**:
+   - Mujoco and PyBullet for physics simulation.
+   - Observation and action rescaling wrappers based on gym/gymnasium.
 
 2. **Learning Framework**:
-   - Tianshou (built on PyTorch) for RL implementation
-   - DDPG (Deep Deterministic Policy Gradient) algorithm
-   - Neural networks for policy and value functions
+   - Tianshou (built on PyTorch) for RL implementation.
 
-3. **Project Structure**:
+3. **Hyperparameter Tuning**:
+   - Ray Tune.
+
+## Project Structure
 
 ```
 luckyrobot/
-├── envs/ # Custom PyBullet environments
-├── models/ # Neural network architectures
-├── configs/ # Configuration files
-├── scripts/ # Training and evaluation scripts
-├── assets/ # Robot URDFs and other assets
-└── utils/ # Helper functions
+   ├── envs/ # Custom PyBullet environments
+   ├── models/ # Neural network architectures
+   ├── configs/ # Configuration files
+   ├── scripts/ # Training and evaluation scripts
+   ├── tests/ # Test files
+   ├── trainers/ # training pipeline 
+   └── utils/ # Helper functions
+   ├── videos/ # Evaulation videos
+   
 ```
-**Demonstration**
-Train the robot in simulation and record a short video (up to 5 minutes) using Loom or a similar tool. The video should:
-Walk us through your process, highlighting any challenges faced and how they were addressed.
-Show the final result of the trained robot performing the task.
 
-**What Not to Do**
-No presentations- we're only interested in code walkthroughs and a step-by-step breakdown of your AI pipeline.
-Do not exceed 5 minutes - Think of this as a modern cover letter, a short introduction, not a deep dive
+## Installation
 
+To install the required dependencies, run:
 
-## Errors in dependency
-
-deep_mimic_env.py line 118
-
-```python
-self.observation_space = spaces.Box(observation_min, observation_min, dtype=np.float32)
+```sh
+pip install -r requirements.txt
 ```
 
 
+## Usage
+
+To train the robot in simulation, run:
+
+```sh
+python scripts/train_mujoco.py
+```
+
+To evaluate the robot in simulation and watch the performance, run:
+
+```sh
+python scripts/train_mujoco.py --watch
+```
+
+For hyperparameter tuning, run
+```sh
+python scripts/train_mujoco_grids.py
+```
 
 
+## Demonstration
+A demonstration video of the final trained policy is saved at `videos/` for reference.
+
+
+## Bugs in Dependency
+The pybullet `Humanoid` environment has bugs as listed below:
+
+- deep_mimic_env.py line 118
+
+   ```python
+   self.observation_space = spaces.Box(observation_min, observation_min, dtype=np.float32)
+   ```
