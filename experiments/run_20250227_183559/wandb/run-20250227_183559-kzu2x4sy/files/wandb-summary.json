@@ -1,1 +1,0 @@
-{"training/epoch_reward_mean":0,"system/device":"cuda","_runtime":11.274870118,"_wandb":{"runtime":189},"_step":1,"system/cuda_available":true,"_timestamp":1.740702971010656e+09,"training/step":0,"training/epoch":0,"time/epoch_time":0.0008733272552490234,"time/steps_per_second":0,"training/epoch_reward_std":0,"system/cuda_device_count":1}

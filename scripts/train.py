@@ -1,437 +1,351 @@
-import gym
-import torch
-import numpy as np
-from tianshou.data import Collector, VectorReplayBuffer, Batch
-from tianshou.env import DummyVectorEnv
-from tianshou.policy import SACPolicy
-from tianshou.trainer import offpolicy_trainer
-from tianshou.utils.net.common import Net
-from tianshou.utils.net.continuous import ActorProb, Critic
-import wandb
-from torch.distributions import Normal, Independent
-from typing import Tuple, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Type, Union 
+
 import os
-from datetime import datetime
-import json
-from pathlib import Path
+import gymnasium as gym
+import torch
+import pprint
+import datetime
+import argparse
+import numpy as np
 import time
-import pybullet_envs  # Changed back to pybullet_envs
+from torch import nn
+from torch.optim.lr_scheduler import LambdaLR
+from torch.utils.tensorboard import SummaryWriter
+from torch.distributions import Independent, Normal
+import random 
 
-class WandbLogger:
-    """Custom logger that implements Tianshou's logger interface for wandb"""
+from tianshou.policy import PPOPolicy
+from tianshou.utils import TensorboardLogger
+from tianshou.env import SubprocVectorEnv
+from tianshou.utils.net.common import Net
+from tianshou.trainer import OnpolicyTrainer
+from tianshou.utils.net.continuous import Actor, Critic, ActorProb
+from tianshou.utils.net.common import ActorCritic
+from tianshou.data import Collector, ReplayBuffer, VectorReplayBuffer
+
+# customized env
+from envs.bullet_env import make_env
+from models.mlp import MLP
+from envs.bullet_env import ScaleObservationWrapper
+
+def layer_init(
+    layer: nn.Module, std: float = np.sqrt(2), bias_const: float = 0.0
+) -> nn.Module:
+    torch.nn.init.orthogonal_(layer.weight, std)
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
+
+
+class Pipeline:
+    """Training pipeline DRL agents."""
     
-    def __init__(self):
-        self.wandb = wandb
+    def __init__(self, args):
+        """Initialize pipeline with arguments."""
+        self.args = args
+        self.env = None
+        self.train_envs = None
+        self.test_envs = None
+        self.actor = None
+        self.critic = None
+        self.actor_critic = None
+        self.policy = None
+        self.train_collector = None
+        self.test_collector = None
+        self.logger = None
+        self.log_path = None
         
-    def log_update_data(self, data: Dict, step: int) -> None:
-        """Log training update data"""
-        self.wandb.log({
-            "train/loss": data.get("loss", 0),
-            "train/policy_loss": data.get("policy_loss", 0),
-            "train/value_loss": data.get("value_loss", 0),
-            "train/step": step,
-        })
+    def setup_environments(self):
+        """Create and configure training and testing environments."""
+        self.env = make_env(env_name=self.args.task)
+        self.args.state_shape = self.env.observation_space.shape or self.env.observation_space.n
+        self.args.action_shape = self.env.action_space.shape or self.env.action_space.n
+        self.args.max_action = self.env.action_space.high[0]
+        print("Observations shape:", self.args.state_shape)
+        print("Actions shape:", self.args.action_shape)
+        print("Action range:", np.min(self.env.action_space.low),
+              np.max(self.env.action_space.high))
+        
+        #self.env = ScaleObservationWrapper(self.env)
+        
+        self.train_envs = SubprocVectorEnv(
+            [lambda: make_env(env_name=self.args.task) for _ in range(self.args.training_num)])
+        
+        # only render when testing
+        render = True if self.args.render > 0 else False
+        render = render and self.args.watch 
+        
+        self.test_envs = SubprocVectorEnv(
+            [lambda: make_env(env_name=self.args.task, renders=render) for _ in range(self.args.test_num)])
+        
+    def set_seed(self):
+        """Set random seeds for reproducibility."""
+        random.seed(self.args.seed)
+        np.random.seed(self.args.seed)
+        torch.manual_seed(self.args.seed)
+        self.train_envs.seed([self.args.seed + i for i in range(self.args.training_num)])
+        
+        # debug 
+        env0 = self.train_envs._env_fns[0]()
+        print(f"env0 seed: {env0._seed}")
 
-    def log_test_data(self, data: Dict, step: int) -> None:
-        """Log test data"""
-        if "rew" in data:
-            self.wandb.log({
-                "test/reward": data["rew"],
-                "test/reward_std": data.get("rew_std", 0),
-                "test/length": data.get("len", 0),
-                "test/step": step
-            })
+        
+        self.test_envs.seed([self.args.seed + i for i in range(self.args.test_num)])
 
-    def save_data(self, epoch: int, env_step: int, gradient_step: int, save_checkpoint_fn: Optional[Union[bool, None]] = None) -> None:
-        """Save training data"""
-        pass  # We handle saving through our own checkpoint system
-
-class RoboticMLPipeline:
-    """
-    End-to-end ML pipeline for robotic control, demonstrating:
-    1. Data Collection & Environment Interface
-    2. Neural Network Architecture Design
-    3. Policy Learning System
-    4. Training Loop with Monitoring
-    5. Model Evaluation
-    """
-    
-    def __init__(self, config: Dict):
-        self.config = config
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Create experiment directory
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.exp_dir = Path(f"experiments/run_{timestamp}")
-        self.exp_dir.mkdir(parents=True, exist_ok=True)
+    def build_model(self):
+        """Build actor-critic model."""
+        net_a = Net(self.args.state_shape, 
+                 hidden_sizes=self.args.hidden_sizes,
+                 activation=nn.ReLU, 
+                 device=self.args.device)
         
-        # Save config
-        with open(self.exp_dir / "config.json", "w") as f:
-            json.dump(config, f, indent=4)
+        self.actor = ActorProb(
+            net_a, 
+            self.args.action_shape, 
+            max_action=self.args.max_action,
+            device=self.args.device
+        ).to(self.args.device)
         
-        # Initialize wandb for experiment tracking
-        self.setup_logging(timestamp)
+        net_c = Net(self.args.state_shape, 
+                    hidden_sizes=self.args.hidden_sizes,
+                    activation=nn.ReLU, 
+                    device=self.args.device)
         
-    def setup_logging(self, timestamp: str):
-        """Setup experiment tracking and logging"""
-        wandb.init(
-            project="luckyrobot-reach-grasp",
-            name=f"run_{timestamp}",
-            config=self.config,
-            tags=["robotic-control", "RL"],
-            dir=str(self.exp_dir)
-        )
+        self.critic = Critic(
+            net_c, 
+            device=self.args.device
+        ).to(self.args.device)
         
-        # Log system info
-        wandb.log({
-            "system/device": str(self.device),
-            "system/cuda_available": torch.cuda.is_available(),
-            "system/cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
-        })
-        
-    def create_environments(self) -> Tuple[gym.Env, DummyVectorEnv, DummyVectorEnv]:
-        """
-        Step 1: Environment Setup and Data Collection Interface
-        Creates training and testing environments with proper vectorization
-        """
-        # Base env for getting spaces
-        env = gym.make('HumanoidDeepMimicWalkBulletEnv-v1', render=False)  # Changed render_mode to render
-        
-        # Training environments
-        train_envs = DummyVectorEnv(
-            [lambda: gym.make('HumanoidDeepMimicWalkBulletEnv-v1', render=False) 
-             for _ in range(self.config['num_train_envs'])]
-        )
-        
-        # Test environments - one with rendering
-        test_envs = DummyVectorEnv(
-            [lambda: gym.make('HumanoidDeepMimicWalkBulletEnv-v1', 
-                            render=True if i == 0 else False)  # Changed render_mode to render
-             for i in range(self.config['num_test_envs'])]
-        )
-        return env, train_envs, test_envs
-        
-    def create_networks(self, env: gym.Env) -> Tuple[ActorProb, Critic, Critic]:
-        """
-        Step 2: Neural Network Architecture Design
-        Defines actor-critic architecture for robotic control
-        """
-        # Network parameters
-        state_shape = env.observation_space.shape or env.observation_space.n
-        action_shape = env.action_space.shape or env.action_space.n
-        max_action = env.action_space.high[0]
-        
-        # Actor network (policy network)
-        net_a = Net(
-            state_shape, 
-            hidden_sizes=self.config['actor_hidden_sizes'],
-            activation=torch.nn.ReLU,
-            device=self.device
-        ).to(self.device)
-        
-        actor = ActorProb(
-            net_a,
-            action_shape,
-            max_action=max_action,
-            unbounded=True,
-            device=self.device
-        ).to(self.device)
-        
-        # Dual critics for Q-learning (value networks)
-        def create_critic():
-            net = Net(
-                state_shape,
-                action_shape,
-                hidden_sizes=self.config['critic_hidden_sizes'],
-                activation=torch.nn.ReLU,
-                concat=True,
-                device=self.device
-            ).to(self.device)
-            return Critic(net, device=self.device).to(self.device)
+        torch.nn.init.constant_(self.actor.sigma_param, -0.5)
+        for m in list(self.actor.modules()) + list(self.critic.modules()):
+            if isinstance(m, torch.nn.Linear):
+                # orthogonal initialization
+                torch.nn.init.orthogonal_(m.weight, gain=np.sqrt(2))
+                torch.nn.init.zeros_(m.bias)
+        # do last policy layer scaling, this will make initial actions have (close to)
+        # 0 mean and std, and will help boost performances,
+        # see https://arxiv.org/abs/2006.05990, Fig.24 for details
+        for m in self.actor.mu.modules():
+            if isinstance(m, torch.nn.Linear):
+                torch.nn.init.zeros_(m.bias)
+                m.weight.data.copy_(0.01 * m.weight.data)
             
-        critic1, critic2 = create_critic(), create_critic()
+        self.actor_critic = ActorCritic(self.actor, self.critic)
         
-        # Initialize networks with orthogonal initialization
-        self._initialize_networks(actor, critic1, critic2)
+    def setup_optimization(self):
+        """Setup optimizer and learning rate scheduler."""
+        optim = torch.optim.Adam(self.actor_critic.parameters(), lr=self.args.lr, eps=1e-5)
         
-        return actor, critic1, critic2
+        lr_scheduler = None
+        if self.args.lr_decay:
+            max_update_num = np.ceil(
+                self.args.step_per_epoch / self.args.step_per_collect) * self.args.epoch
+            lr_scheduler = LambdaLR(
+                optim, lr_lambda=lambda epoch: 1 - epoch / max_update_num)
         
-    def _initialize_networks(self, *networks):
-        """Initialize network parameters using orthogonal initialization"""
-        for net in networks:
-            for m in net.modules():
-                if isinstance(m, torch.nn.Linear):
-                    torch.nn.init.orthogonal_(m.weight)
-                    torch.nn.init.zeros_(m.bias)
-    
-    def create_policy(self, env: gym.Env, actor: ActorProb, 
-                     critic1: Critic, critic2: Critic) -> SACPolicy:
-        """
-        Step 3: Policy Learning System
-        Sets up SAC policy with proper optimizers and hyperparameters
-        """
-        # Create optimizers
-        actor_optim = torch.optim.Adam(actor.parameters(), lr=self.config['actor_lr'])
-        critic1_optim = torch.optim.Adam(critic1.parameters(), lr=self.config['critic_lr'])
-        critic2_optim = torch.optim.Adam(critic2.parameters(), lr=self.config['critic_lr'])
-
-        # Create SAC policy with correct parameter order
-        policy = SACPolicy(
-            actor=actor,
-            actor_optim=actor_optim,
-            critic1=critic1,
-            critic1_optim=critic1_optim,
-            critic2=critic2,
-            critic2_optim=critic2_optim,
-            action_space=env.action_space,
-            tau=self.config['tau'],  # Target network update rate
-            gamma=self.config['gamma'],  # Discount factor
-            alpha=self.config['alpha'],  # Temperature parameter
-            estimation_step=self.config['n_step_returns'],
-            action_scaling=True,
-            action_bound_method="clip"
-        )
-        return policy
-    
-    def setup_collectors(self, policy: SACPolicy, train_envs: DummyVectorEnv, 
-                        test_envs: DummyVectorEnv) -> Tuple[Collector, Collector]:
-        """
-        Step 4: Data Collection System
-        Creates collectors for gathering experience during training
-        """
-        # Create collectors first
-        buffer = VectorReplayBuffer(
-            self.config['buffer_size'],
-            self.config['num_train_envs']
+        return optim, lr_scheduler
+        
+    def create_policy(self, optim, lr_scheduler):
+        """Create PPO policy."""
+        def dist(loc_scale: tuple[torch.Tensor, torch.Tensor]):
+            loc, scale = loc_scale
+            return Independent(Normal(loc, scale), 1)
+                
+        self.policy = PPOPolicy(
+            actor=self.actor,
+            critic=self.critic,
+            optim=optim,
+            dist_fn=dist,
+            discount_factor=self.args.gamma,
+            gae_lambda=self.args.gae_lambda,
+            max_grad_norm=self.args.max_grad_norm,
+            vf_coef=self.args.vf_coef,
+            ent_coef=self.args.ent_coef,
+            reward_normalization=self.args.rew_norm,
+            action_scaling=False,
+            action_bound_method=self.args.bound_action_method,
+            lr_scheduler=lr_scheduler,
+            action_space=self.env.action_space,
+            eps_clip=self.args.eps_clip,
+            value_clip=self.args.value_clip,
+            dual_clip=self.args.dual_clip,
+            advantage_normalization=self.args.norm_adv,
+            recompute_advantage=self.args.recompute_adv
         )
         
-        def _preprocess_fn(**kwargs):
-            # Only convert observations and actions to tensors on GPU
-            for key in ['obs', 'obs_next', 'act']:  # Removed 'rew' and 'done'
-                if key in kwargs:
-                    if isinstance(kwargs[key], torch.Tensor):
-                        kwargs[key] = kwargs[key].to(self.device)
-                    elif isinstance(kwargs[key], (np.ndarray, float, int)):
-                        kwargs[key] = torch.as_tensor(kwargs[key], device=self.device)
-                    print(f"Preprocessed {key}: device = {kwargs[key].device}")  # Debug print
+        if self.args.resume_path:
+            self.policy.load_state_dict(
+                torch.load(self.args.resume_path, map_location=self.args.device))
+            print("Loaded agent from: ", self.args.resume_path)
             
-            # Keep rewards and done flags as numpy arrays
-            for key in ['rew', 'done']:
-                if key in kwargs:
-                    if isinstance(kwargs[key], torch.Tensor):
-                        kwargs[key] = kwargs[key].cpu().numpy()
-                    elif not isinstance(kwargs[key], np.ndarray):
-                        kwargs[key] = np.array(kwargs[key])
-                    print(f"Preprocessed {key}: type = {type(kwargs[key])}")  # Debug print
+    def setup_collectors(self):
+        """Setup data collectors for training and testing."""
+        if self.args.training_num > 1:
+            buffer = VectorReplayBuffer(self.args.buffer_size, len(self.train_envs))
+        else:
+            buffer = ReplayBuffer(self.args.buffer_size)
             
-            return kwargs
+        self.train_collector = Collector(
+            self.policy, self.train_envs, buffer, exploration_noise=True)
+        self.test_collector = Collector(self.policy, self.test_envs)
         
-        train_collector = Collector(
-            policy,
-            train_envs,
-            buffer,
-            exploration_noise=True,
-            preprocess_fn=_preprocess_fn
-        )
+    def setup_logging(self):
+        """Setup tensorboard logging."""
+        self.log_path = os.path.join(self.args.logdir, self.args.task)
+        writer = SummaryWriter(self.log_path)
+        writer.add_text("args", str(self.args))
+        self.logger = TensorboardLogger(writer)
         
-        test_collector = Collector(
-            policy, 
-            test_envs,
-            preprocess_fn=_preprocess_fn
-        )
-        
-        # Add callback after creation
-        def on_episode_end(collector, data: Batch):
-            if data.done.any():  # Log when episode ends
-                rewards = data.rew[data.done].cpu().numpy()  # Get rewards for completed episodes
-                for reward in rewards:
-                    wandb.log({
-                        'training/step_reward': reward,
-                        'training/step': collector.collect_step,
-                    })
-                    print(f"Episode ended with reward: {reward}, total steps: {collector.collect_step}")
-        
-        # Register the callback
-        train_collector.on_episode_end = on_episode_end
-        
-        # Initialize collectors
-        train_collector.reset()
-        test_collector.reset()
-        
-        # Collect initial experience
-        print("Collecting initial experience...")
-        train_collector.collect(n_step=self.config['batch_size'])
-        
-        return train_collector, test_collector
-    
-    def save_checkpoint(self, epoch: int, policy: SACPolicy, mean_reward: float):
-        """Save a training checkpoint"""
-        checkpoint = {
-            'epoch': epoch,
-            'policy_state_dict': policy.state_dict(),
-            'mean_reward': mean_reward,
-            'config': self.config,
-        }
-        
-        # Save latest
-        torch.save(checkpoint, self.exp_dir / "latest_checkpoint.pth")
-        
-        # Save periodic checkpoint
-        if epoch % self.config['save_interval'] == 0:
-            torch.save(checkpoint, self.exp_dir / f"checkpoint_epoch_{epoch}.pth")
-            wandb.save(str(self.exp_dir / f"checkpoint_epoch_{epoch}.pth"))
-        
-        # Save best model if this is the best reward
-        if not hasattr(self, 'best_reward') or mean_reward > self.best_reward:
-            self.best_reward = mean_reward
-            torch.save(checkpoint, self.exp_dir / "best_model.pth")
-            wandb.save(str(self.exp_dir / "best_model.pth"))
-
     def train(self):
-        """
-        Step 5: Training Loop with Monitoring
-        Implements the main training loop with proper monitoring and evaluation
-        """
-        # Create components
-        env, train_envs, test_envs = self.create_environments()
-        actor, critic1, critic2 = self.create_networks(env)
-        policy = self.create_policy(env, actor, critic1, critic2)
-        train_collector, test_collector = self.setup_collectors(
-            policy, train_envs, test_envs
-        )
-        
-        # Initialize statistics tracking
-        train_stats = {
-            'epoch_times': [],
-            'train_rewards': [],
-            'test_rewards': [],
-            'actor_losses': [],
-            'critic_losses': [],
-        }
-        
-        start_time = time.time()
-        
-        def log_train_stats(epoch, env_step, reward_stat, losses=None):
-            """Callback to log training statistics (called every epoch)"""
-            epoch_time = time.time() - start_time
-            train_stats['epoch_times'].append(epoch_time)
-            
-            # Get mean reward from stat
-            mean_reward = reward_stat['mean'] if reward_stat is not None else 0.0
-            
-            # Prepare logging dict for epoch-level metrics
-            log_dict = {
-                'training/epoch': epoch,
-                'training/step': env_step,
-                'training/epoch_reward_mean': mean_reward,  # Renamed to clarify this is epoch-level
-                'time/epoch_time': epoch_time,
-                'time/steps_per_second': env_step / (epoch_time + 1e-6),
-            }
-            
-            # Add reward std if available
-            if reward_stat is not None and 'std' in reward_stat:
-                log_dict['training/epoch_reward_std'] = reward_stat['std']  # Renamed to clarify
-            
-            # Log to wandb
-            wandb.log(log_dict)
-            
-            # Print progress
-            print(f"\nEpoch {epoch}")
-            print(f"Steps: {env_step}")
-            print(f"Mean reward: {mean_reward:.2f}")
-            print(f"Time elapsed: {epoch_time:.2f}s")
-            print(f"Steps per second: {env_step / (epoch_time + 1e-6):.2f}")
-        
-        def save_checkpoint_callback(epoch, env_step, mean_reward):
-            """Callback to save checkpoints"""
-            self.save_checkpoint(epoch, policy, mean_reward)
-        
-        # Create custom logger
-        custom_logger = WandbLogger()
-        
-        # Training loop
-        result = offpolicy_trainer(
-            policy=policy,
-            train_collector=train_collector,
-            test_collector=test_collector,
-            max_epoch=self.config['max_epoch'],
-            step_per_epoch=self.config['step_per_epoch'],
-            step_per_collect=self.config['step_per_collect'],
-            update_per_step=self.config['update_per_step'],
-            episode_per_test=self.config['episode_per_test'],
-            batch_size=self.config['batch_size'],
-            stop_fn=lambda mean_rewards: mean_rewards >= self.config['target_reward'],
-            logger=custom_logger,  # Use our custom logger instead of wandb directly
-            save_best_fn=save_checkpoint_callback,
-            save_checkpoint_fn=lambda epoch, env_step, gradient_step: epoch % self.config['save_interval'] == 0,
-            verbose=True,
-            train_fn=lambda epoch, env_step: log_train_stats(
-                epoch, 
-                env_step, 
-                {'mean': train_collector.collect_step, 'std': 0.0},
-                None
-            ),
-            test_fn=lambda epoch, env_step: log_train_stats(
-                epoch, 
-                env_step, 
-                {'mean': test_collector.collect_step, 'std': 0.0},
-                None
-            )
-        )
-        
-        # Final save
-        self.save_checkpoint(self.config['max_epoch'], policy, result['best_reward'])
-        
-        # Log final statistics
-        wandb.log({
-            'final/best_reward': result['best_reward'],
-            'final/total_steps': result['total_steps'],
-            'final/total_time': time.time() - start_time,
-        })
+        """Training loop."""
+        def save_best_fn(policy) -> None:
+            # Only save the policy state dict
+            torch.save(policy.state_dict(), os.path.join(self.log_path, "policy.pth"))
+                            
+        result = OnpolicyTrainer(
+            policy=self.policy,
+            train_collector=self.train_collector,
+            test_collector=self.test_collector,
+            max_epoch=args.epoch,
+            step_per_epoch=args.step_per_epoch,
+            repeat_per_collect=args.repeat_per_collect,
+            episode_per_test=args.test_num,
+            batch_size=args.batch_size,
+            step_per_collect=args.step_per_collect,
+            save_best_fn=save_best_fn,
+            logger=self.logger,
+            test_in_train=False,
+        ).run()
         
         return result
+        
+    def evaluate(self):
+        """Evaluate trained policy.
+        
+        This method can be used both during training and for standalone evaluation.
+        """
+        self.policy.eval()
+        self.test_envs.seed(self.args.seed)
+        
+        if self.args.save_buffer_name:
+            buffer = VectorReplayBuffer(
+                self.args.buffer_size,
+                buffer_num=len(self.test_envs),
+                ignore_obs_next=True,
+                save_only_last_obs=True,
+                stack_num=self.args.frames_stack,
+            )
+            collector = Collector(
+                self.policy, self.test_envs, buffer, exploration_noise=True)
+            result = collector.collect(
+                n_step=self.args.buffer_size, reset_before_collect=True)
+            buffer.save_hdf5(self.args.save_buffer_name)
+        else:
+            print(f"Testing agent over {self.args.test_num} episodes...")
+            self.test_collector.reset()
+            result = self.test_collector.collect(
+                n_episode=self.args.test_num, render=self.args.render)
+        
+        # Process and display results
+        print(result)
+        # Access statistics from the new CollectStats object
+        rew_mean = result.returns_stat.mean
+        rew_std = result.returns_stat.std
+        length_mean = result.lens_stat.mean
+        
+        print(f"\nEvaluation Results over {result.n_collected_episodes} episodes:")
+        print(f"Mean Reward: {rew_mean:.2f} ± {rew_std:.2f}")
+        print(f"Mean Episode Length: {length_mean:.2f}")
+        
+        # Save results if requested (typically during standalone evaluation)
+        if hasattr(self.args, 'save_results') and self.args.save_results:
+            results = {
+                "reward_mean": rew_mean,
+                "reward_std": rew_std,
+                "length_mean": length_mean,
+                "n_episodes": result.n_collected_episodes
+            }
+            save_path = os.path.join(os.path.dirname(self.args.resume_path 
+                                                    if self.args.resume_path 
+                                                    else self.log_path), 
+                                    "eval_results.txt")
+            with open(save_path, "w") as f:
+                for key, value in results.items():
+                    f.write(f"{key}: {value}\n")
+            print(f"\nResults saved to {save_path}")
+        
+        return result
+        
+    def run(self):
+        """Run the complete pipeline."""
+        # Setup
+        self.setup_environments()
+        self.set_seed()
+        self.build_model()
+        optim, lr_scheduler = self.setup_optimization()
+        self.create_policy(optim, lr_scheduler)
+        self.setup_collectors()
+        self.setup_logging()
+        
+        # Training
+        if not self.args.watch:
+            result = self.train()
+            pprint.pprint(result)
+        
+        # Evaluation
+        self.evaluate()
 
-def main():
-    # Configuration for the ML pipeline
-    config = {
-        # Environment settings
-        'num_train_envs': 1,
-        'num_test_envs': 1,
-        
-        # Network architecture - might need adjustment for new env
-        'actor_hidden_sizes': [256, 256, 256],
-        'critic_hidden_sizes': [256, 256, 256],
-        
-        # Learning parameters
-        'actor_lr': 3e-4,  # Adjusted for humanoid
-        'critic_lr': 3e-4,  # Adjusted for humanoid
-        'gamma': 0.99,
-        'tau': 0.005,
-        'alpha': 0.2,
-        'n_step_returns': 1,
-        
-        # Training settings
-        'max_epoch': 200,  # Increased for more complex task
-        'step_per_epoch': 1000,  # Increased for more steps per epoch
-        'step_per_collect': 100,
-        'update_per_step': 0.1,
-        'batch_size': 256,
-        'buffer_size': 1000000,  # Increased for more complex environment
-        'episode_per_test': 1,
-        'target_reward': 2000,  # Adjusted for humanoid environment
-        
-        # Logging settings
-        'save_interval': 10,
-        'log_interval': 1,
-        
-        # Experiment tracking
-        'exp_name': 'humanoid_deepmimic_baseline',
-        'notes': 'SAC implementation for humanoid walking task',
-    }
-    
-    # Create and run the pipeline
-    pipeline = RoboticMLPipeline(config)
-    pipeline.train()
+def main(args):
+    pipeline = Pipeline(args)
+    pipeline.run()
 
 if __name__ == "__main__":
-    main() 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--task', type=str, default='HumanoidDeepMimicWalkBulletEnv-v1')
+    parser.add_argument('--seed', type=int, default=2025)
+    parser.add_argument('--gamma', type=float, default=0.99)
+    parser.add_argument('--step-per-epoch', type=int, default=1000)#!!!!!!!!!!!!!
+    parser.add_argument('--step-per-collect', type=int, default=400)#!!!!!!!!!!!!!
+    parser.add_argument('--repeat-per-collect', type=int, default=10)
+    parser.add_argument('--training-num', type=int, default=16)
+    parser.add_argument('--test-num', type=int, default=1)
+    # ppo special
+    parser.add_argument('--rew-norm', type=int, default=True)
+    # In theory, `vf-coef` will not make any difference if using Adam optimizer.
+    parser.add_argument('--vf-coef', type=float, default=0.25)
+    parser.add_argument('--ent-coef', type=float, default=0.01)
+    parser.add_argument('--gae-lambda', type=float, default=0.95)
+    # bound action to [-1,1] using different methods. empty means no bounding
+    parser.add_argument('--bound-action-method', type=str, default="clip")
+    parser.add_argument('--lr-decay', type=int, default=True)
+    parser.add_argument('--max-grad-norm', type=float, default=0.5)
+    parser.add_argument('--eps-clip', type=float, default=0.2)
+    parser.add_argument('--dual-clip', type=float, default=None)
+    parser.add_argument('--value-clip', type=int, default=0)
+    parser.add_argument('--norm-adv', type=int, default=0)
+    parser.add_argument('--recompute-adv', type=int, default=1)
+    parser.add_argument('--logdir', type=str, default='log_ppo')
+    parser.add_argument('--render', type=float, default=1.)
+    parser.add_argument(
+        '--device', type=str,
+        default='cuda' if torch.cuda.is_available() else 'cpu')
+    parser.add_argument('--resume-path', type=str, default=None)#'ckpts/policy.pth')
+    parser.add_argument('--test-only', type=bool, default=False)
+    parser.add_argument(
+        "--watch",
+        default=False,
+        action="store_true",
+        help="watch the play of pre-trained policy only",
+    )
+    parser.add_argument("--save-buffer-name", type=str, default=None)
+    # tunable parameters
+    parser.add_argument('--lr', type=float, default=3e-04) #0.0003!!!!!!!!!!!!!!!!!!!!!
+    parser.add_argument('--epoch', type=int, default=1000)
+    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--n-hidden-layers', type=int, default=2)
+    parser.add_argument('--buffer-size', type=int, default=4096)
+
+    args = parser.parse_args()
+    args.hidden_sizes= [2048, 128]
+    
+    main(args)# baselines [32, 32]

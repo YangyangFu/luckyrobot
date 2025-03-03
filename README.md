@@ -12,10 +12,17 @@ Your task is to design and implement a pipeline to train a robot to perform a pe
 ### Deliverables
 
 **Task Definition**
-For this project, we will implement a robotic arm reaching and grasping task using reinforcement learning in simulation. The robot will learn to:
-1. Reach a target position in 3D space
-2. Orient its end-effector appropriately
-3. Control a parallel gripper to grasp objects
+For this project, we will implement a humanoid walking task using reinforcement learning in simulation. The robot will learn to:
+1. Walk in a natural human-like manner
+2. Maintain balance while walking
+3. Follow reference motion data for realistic movement
+
+The implementation uses PPO (Proximal Policy Optimization) with the following key components:
+- Actor-critic architecture with shared network layers
+- Observation scaling for better training stability 
+- Parallel training environments for faster data collection
+- Advantage estimation with GAE-λ
+- Action bounds handling for the humanoid's joints
 
 This task is fundamental to robotic manipulation and represents a core capability needed in various applications from manufacturing to service robotics.
 
@@ -50,4 +57,16 @@ Show the final result of the trained robot performing the task.
 **What Not to Do**
 No presentations- we're only interested in code walkthroughs and a step-by-step breakdown of your AI pipeline.
 Do not exceed 5 minutes - Think of this as a modern cover letter, a short introduction, not a deep dive
+
+
+## Errors in dependency
+
+deep_mimic_env.py line 118
+
+```python
+self.observation_space = spaces.Box(observation_min, observation_min, dtype=np.float32)
+```
+
+
+
 

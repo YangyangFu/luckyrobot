@@ -1,12 +1,14 @@
 import time
 import numpy as np
-from envs.humanoid_walk_env import make_env
+from envs.bullet_env import make_env
 from tianshou.env import DummyVectorEnv, SubprocVectorEnv
-
+from utils.utils import seed_everything
+#seed_everything(48)
+    
 def test_env():
     # Create environment
     print("Creating environment...")
-    env = make_env(renders=False)  # Set renders=False for testing
+    env = make_env(renders=True)  # Set renders=False for testing
     
     # Test spaces
     print("\nTesting spaces:")
@@ -73,8 +75,22 @@ def test_vectorized_env():
             sampled_steps += num_cpu
         time_used = time.time() - time_start
         print(f"{time_used}s used to sample 1000 steps if using {num_cpu} cpus.")
+
+
+def test_seed():
+    # this evn has no seed control.
     
+    env = make_env(renders=False)
+
+    obs1, info = env.reset()
+    obs2, info = env.reset()
+    obs3, info = env.reset()
+    print(f"obs1: {obs1[:5]}")
+    print(f"obs2: {obs2[:5]}")
+    print(f"obs3: {obs3[:5]}")
+    env.close()
 
 if __name__ == "__main__":
     test_env()
     test_vectorized_env()
+    test_seed()

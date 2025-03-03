@@ -1,7 +1,10 @@
-numpy>=1.21.0
+numpy==1.24.3
 torch>=1.9.0
-pybullet>=3.2.5
-tianshou>=0.4.11
-gym==0.25.0
+pybullet==3.2.7
+tianshou==1.1.0
+gym==0.17.3
+gymnasium
 opencv-python>=4.5.3
 wandb>=0.12.0
+mpi4py
+moviepy==2.0.0.dev2
